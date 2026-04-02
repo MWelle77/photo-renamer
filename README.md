@@ -44,7 +44,7 @@ Download the latest Windows `.exe` from the [Releases](../../releases) page — 
 **Requirements:** Python 3.10+
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/photo-renamer.git
+git clone https://github.com/MWelle77/photo-renamer.git
 cd photo-renamer
 pip install -r requirements.txt
 python main.py
