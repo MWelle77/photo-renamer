@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Settings saved locally
+.photo_renamer_settings.json
+
+# OS
+.DS_Store
+Thumbs.db
