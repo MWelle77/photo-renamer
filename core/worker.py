@@ -5,9 +5,12 @@ The tkinter main thread polls the queue with root.after().
 
 from __future__ import annotations
 
+import bisect
+import os
 import queue
 import threading
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -37,6 +40,8 @@ class MsgDone:
     no_metadata: list
 
 
+# ── Timezone helpers ───────────────────────────────────────────────────────
+
 def _apply_video_tz(records: list, mode: str, folder_offsets: dict) -> None:
     """Adjust datetime on video FileRecords according to the chosen timezone mode."""
     if mode == 'ask_folder':
@@ -58,12 +63,23 @@ def _apply_video_tz(records: list, mode: str, folder_offsets: dict) -> None:
             vids = [r for r in groups['videos'] if r.dt is not None]
             if not imgs or not vids:
                 continue
+
+            # Sort images by datetime for binary search — O(n log n) instead of O(n²)
+            imgs_sorted = sorted(imgs, key=lambda r: r.dt)
+            img_dts = [r.dt for r in imgs_sorted]
+
             for vid_rec in vids:
-                closest = min(imgs, key=lambda r: abs((r.dt - vid_rec.dt).total_seconds()))
+                pos = bisect.bisect_left(img_dts, vid_rec.dt)
+                candidates = imgs_sorted[max(0, pos - 1): pos + 2]
+                if not candidates:
+                    continue
+                closest = min(candidates, key=lambda r: abs((r.dt - vid_rec.dt).total_seconds()))
                 offset_hours = round((closest.dt - vid_rec.dt).total_seconds() / 3600)
-                if -14 <= offset_hours <= 14:  # sanity check
+                if -14 <= offset_hours <= 14:
                     vid_rec.dt = vid_rec.dt + timedelta(hours=offset_hours)
 
+
+# ── Worker ─────────────────────────────────────────────────────────────────
 
 class RenameWorker(threading.Thread):
     def __init__(self, folder: str, out_queue: queue.Queue,
@@ -107,21 +123,33 @@ class RenameWorker(threading.Thread):
 
         q.put(MsgStatus(f"Found {total} files. Reading metadata..."))
 
-        # ── Phase 2: read metadata ─────────────────────────────────────
+        # ── Phase 2: read metadata in parallel ─────────────────────────
         records = []
         no_metadata = []
+        completed = 0
+        max_workers = min(8, (os.cpu_count() or 2) * 2)
 
-        for idx, path in enumerate(files):
-            if self._stop_event.is_set():
-                return
-            q.put(MsgProgress(idx, total, path.name))
-            dt, device = extract_metadata(path)
-            if dt is None:
-                no_metadata.append(path)
-            else:
-                records.append(FileRecord(path=path, dt=dt, device=device))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_path = {executor.submit(extract_metadata, p): p for p in files}
+            for future in as_completed(future_to_path):
+                if self._stop_event.is_set():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    return
+                path = future_to_path[future]
+                completed += 1
+                # Throttle UI updates — every 10 files or the last one
+                if completed % 10 == 0 or completed == total:
+                    q.put(MsgProgress(completed - 1, total, path.name))
+                try:
+                    dt, device = future.result()
+                except Exception:
+                    dt, device = None, 'UNKNOWN'
+                if dt is None:
+                    no_metadata.append(path)
+                else:
+                    records.append(FileRecord(path=path, dt=dt, device=device))
 
-        # ── Phase 2.5: timezone adjustment for videos ─────────────────
+        # ── Phase 2.5: timezone adjustment for videos ──────────────────
         if self.tz_mode != 'utc':
             q.put(MsgStatus("Adjusting video timestamps for timezone..."))
             _apply_video_tz(records, self.tz_mode, self.tz_offsets)
@@ -136,7 +164,8 @@ class RenameWorker(threading.Thread):
         def on_progress(idx: int, total_r: int, name: str):
             if self._stop_event.is_set():
                 raise InterruptedError
-            q.put(MsgProgress(idx, total_r, name))
+            if idx % 10 == 0 or idx == total_r - 1:
+                q.put(MsgProgress(idx, total_r, name))
 
         try:
             result = execute_renames(plan, on_progress=on_progress)

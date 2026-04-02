@@ -17,7 +17,7 @@ from utils.formats import VIDEO_EXTENSIONS
 
 
 POLL_MS = 100  # how often to drain the worker queue (milliseconds)
-VERSION = "1.0"
+VERSION = "1.1"
 
 
 class App(tk.Tk):
