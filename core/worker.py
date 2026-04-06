@@ -16,6 +16,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
+from core.journal import save_journal
 from core.metadata import extract_metadata
 from core.renamer import FileRecord, RenameResult, execute_renames, plan_renames
 from core.scanner import scan_folder
@@ -38,6 +39,7 @@ class MsgProgress:
 class MsgDone:
     result: RenameResult
     no_metadata: list
+    journal_path: Optional[Path] = None
 
 
 # ── Timezone helpers ───────────────────────────────────────────────────────
@@ -49,7 +51,7 @@ def _apply_video_tz(records: list, mode: str, folder_offsets: dict) -> None:
             if rec.path.suffix.lower() not in VIDEO_EXTENSIONS:
                 continue
             hours = folder_offsets.get(str(rec.path.parent))
-            if hours and rec.dt is not None:
+            if hours is not None and rec.dt is not None:
                 rec.dt = rec.dt + timedelta(hours=hours)
 
     elif mode == 'infer_image':
@@ -172,4 +174,12 @@ class RenameWorker(threading.Thread):
         except InterruptedError:
             return
 
-        q.put(MsgDone(result=result, no_metadata=no_metadata))
+        # Save journal so renames can be reversed
+        journal_path = None
+        if result.renamed:
+            try:
+                journal_path = save_journal(self.folder, result.renamed)
+            except Exception:
+                pass
+
+        q.put(MsgDone(result=result, no_metadata=no_metadata, journal_path=journal_path))

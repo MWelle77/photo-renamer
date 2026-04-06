@@ -11,13 +11,14 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
+from core.journal import JOURNAL_FILENAME, reverse_renames
 from core.worker import MsgDone, MsgProgress, MsgStatus, RenameWorker
 from settings import VIDEO_TZ_MODES, Settings, load_settings, save_settings
 from utils.formats import VIDEO_EXTENSIONS
 
 
 POLL_MS = 100  # how often to drain the worker queue (milliseconds)
-VERSION = "1.1"
+VERSION = "1.2"
 
 
 class App(tk.Tk):
@@ -67,6 +68,7 @@ class App(tk.Tk):
 
         ttk.Button(action_frame, text="About", command=self._show_about).pack(side='right')
         ttk.Button(action_frame, text="Settings", command=self._show_settings).pack(side='right', padx=(0, 4))
+        ttk.Button(action_frame, text="Reverse Rename…", command=self._reverse_rename).pack(side='right', padx=(0, 4))
 
         # ── Progress ──
         progress_frame = ttk.LabelFrame(self, text="Progress")
@@ -107,6 +109,56 @@ class App(tk.Tk):
         ).pack(fill='x', padx=8, pady=6)
 
     # ── Controls ──────────────────────────────────────────────────────────
+
+    def _reverse_rename(self):
+        current = self._folder_var.get().strip()
+        initialdir = current if Path(current).is_dir() else str(Path.home())
+        journal_path = filedialog.askopenfilename(
+            title="Select a rename journal to reverse",
+            initialdir=initialdir,
+            filetypes=[("Rename journal", JOURNAL_FILENAME), ("All files", "*.*")],
+        )
+        if not journal_path:
+            return
+        journal_path = Path(journal_path)
+        try:
+            from core.journal import load_journal
+            data = load_journal(journal_path)
+            count = len(data.get('entries', []))
+            renamed_at = data.get('renamed_at', 'unknown time')
+            root = data.get('root_folder', '')
+        except Exception as e:
+            messagebox.showerror("Invalid journal", f"Could not read journal file:\n{e}")
+            return
+
+        if count == 0:
+            messagebox.showinfo("Nothing to reverse", "The journal contains no rename entries.")
+            return
+
+        confirmed = messagebox.askyesno(
+            "Reverse renames",
+            f"This will restore {count} file(s) to their original names.\n\n"
+            f"Renamed at:  {renamed_at}\n"
+            f"Folder:  {root}\n\n"
+            "Continue?",
+        )
+        if not confirmed:
+            return
+
+        success, skipped, errors = reverse_renames(journal_path)
+
+        self._clear_log()
+        self._append_log(f"Reverse rename complete.")
+        self._append_log(f"  Restored:  {success} file(s)")
+        if skipped:
+            self._append_log(f"  Skipped (file not found):  {skipped}")
+        for err in errors:
+            self._append_log(f"  ERR  {err}")
+
+        messagebox.showinfo(
+            "Reverse complete",
+            f"Restored: {success}   Skipped: {skipped}   Errors: {len(errors)}"
+        )
 
     def _show_settings(self):
         dlg = tk.Toplevel(self)
@@ -152,7 +204,7 @@ class App(tk.Tk):
         for folder in sorted(video_folders):
             result = self._ask_tz_for_folder(folder)
             if result is not None:
-                offsets[folder] = result
+                offsets[str(Path(folder))] = result  # normalize to match Path-based lookup
         return offsets
 
     def _ask_tz_for_folder(self, folder: str) -> int | None:
@@ -203,20 +255,30 @@ class App(tk.Tk):
             "https://mcwelle.com/\n"
             "Released under the GNU General Public License v3 (GPL-3.0)\n"
             "──────────────────────────────\n\n"
-            "──────────────────────────────\n\n"
-            "This program renames your photos and videos so that every file\n"
-            "gets a name based on when it was taken — for example:\n\n"
-            "    20240315_143022_iPhone15.jpg\n\n"
-            "This makes your files sort in chronological order automatically\n"
-            "in any folder, regardless of where they came from.\n\n"
+            "Renames your photos and videos so every file gets a name based\n"
+            "on when it was taken — for example:\n\n"
+            "    20240315_143022_IPHONE15.jpg\n\n"
+            "Files sort in chronological order automatically in any folder,\n"
+            "regardless of which camera or device they came from.\n\n"
             "How to use it:\n"
-            "  1. Click Browse… and choose the folder with your photos/videos.\n"
+            "  1. Click Browse… and choose the folder with your media.\n"
             "  2. Click Start Renaming.\n"
-            "  3. Done! Your files will be renamed in place.\n\n"
-            "All subfolders are included automatically — you don't need to\n"
-            "process each folder separately.\n\n"
-            "Supported formats: JPG, PNG, HEIC, TIFF, RAW and MP4, MOV, and more.\n"
-            "Files without date information are left unchanged.",
+            "  3. Done! All subfolders are processed automatically.\n\n"
+            "Supported formats:\n"
+            "  Images — JPG, PNG, HEIC, TIFF, CR2, NEF, ARW, DNG and more\n"
+            "  Videos — MP4, MOV, AVI, MKV, MTS and more\n\n"
+            "Date is read from file metadata (EXIF/video tags). If no metadata\n"
+            "is found, the date is extracted from the filename itself —\n"
+            "useful for WhatsApp photos, screenshots, and similar files.\n\n"
+            "Files that cannot be dated are left completely unchanged.\n"
+            "No files are ever deleted.\n\n"
+            "Reverse Rename:\n"
+            "After every run a journal is saved in the processed folder.\n"
+            "Use Reverse Rename… to restore all files to their original names.\n\n"
+            "Video Timezone (Settings):\n"
+            "Videos often store time in UTC. You can choose to convert it\n"
+            "to local time — either automatically using nearby photos as a\n"
+            "reference, or by entering the UTC offset manually per folder.",
         )
 
     def _browse(self):
@@ -324,6 +386,9 @@ class App(tk.Tk):
         )
         self._summary_var.set(summary)
         self._summary_frame.pack(fill='x', padx=10, pady=5)
+
+        if msg.journal_path:
+            self._append_log(f"Journal saved → {msg.journal_path}")
 
         self._status_var.set("Done.")
         self._file_var.set("")

@@ -3,6 +3,7 @@ Extract (datetime, device_string) from image and video files.
 Returns (None, 'UNKNOWN') when metadata is absent or unreadable.
 """
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -44,12 +45,17 @@ def extract_metadata(path: Path) -> DateDevice:
     suffix = path.suffix.lower()
     try:
         if suffix in IMAGE_EXTENSIONS:
-            return _from_image(path)
-        if suffix in VIDEO_EXTENSIONS:
-            return _from_video(path)
+            result = _from_image(path)
+        elif suffix in VIDEO_EXTENSIONS:
+            result = _from_video(path)
+        else:
+            return None, 'UNKNOWN'
     except Exception:
-        pass
-    return None, 'UNKNOWN'
+        result = (None, 'UNKNOWN')
+    # Fallback: try to parse date from the filename itself
+    if result[0] is None:
+        return _from_filename(path)
+    return result
 
 
 # ── Image ──────────────────────────────────────────────────────────────────
@@ -188,3 +194,42 @@ def _from_video(path: Path) -> DateDevice:
         return dt, sanitize_device_name(make, model)
     except Exception:
         return None, 'UNKNOWN'
+
+
+# ── Filename date parsing (last-resort fallback) ───────────────────────────
+
+# Patterns tried in order — most specific first
+_FN_PATTERNS_WITH_TIME = [
+    # YYYYMMDD[_-T]HHMMSS  e.g. IMG_20240315_143022, Screenshot_20240315-143022
+    re.compile(r'(2\d{3})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])[_\-T]([01]\d|2[0-3])([0-5]\d)([0-5]\d)'),
+    # YYYY-MM-DD[_ T]HH[-:.]MM[-:.]SS  e.g. 2024-03-15 14.30.22, 2024-03-15_14-30-22
+    re.compile(r'(2\d{3})[-_.](0[1-9]|1[0-2])[-_.](\d{2})[_\- T]([01]\d|2[0-3])[-:.]([0-5]\d)[-:.]([0-5]\d)'),
+    # 14 consecutive digits YYYYMMDDHHMMSS  e.g. 20240315143022
+    re.compile(r'(?<!\d)(2\d{3})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])([01]\d|2[0-3])([0-5]\d)([0-5]\d)(?!\d)'),
+]
+
+_FN_PATTERNS_DATE_ONLY = [
+    # YYYYMMDD  e.g. 20240315
+    re.compile(r'(?<!\d)(2\d{3})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)'),
+]
+
+
+def _from_filename(path: Path) -> DateDevice:
+    stem = path.stem
+    for pattern in _FN_PATTERNS_WITH_TIME:
+        m = pattern.search(stem)
+        if m:
+            try:
+                y, mo, d, h, mi, s = (int(x) for x in m.groups())
+                return datetime(y, mo, d, h, mi, s), 'UNKNOWN'
+            except ValueError:
+                continue
+    for pattern in _FN_PATTERNS_DATE_ONLY:
+        m = pattern.search(stem)
+        if m:
+            try:
+                y, mo, d = (int(x) for x in m.groups())
+                return datetime(y, mo, d, 0, 0, 0), 'UNKNOWN'
+            except ValueError:
+                continue
+    return None, 'UNKNOWN'
