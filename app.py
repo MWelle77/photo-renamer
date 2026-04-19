@@ -72,6 +72,8 @@ class App(tk.Tk):
         self._cancel_btn.pack(side='left', padx=(6, 0))
 
         ttk.Button(action_frame, text="About", command=self._show_about).pack(side='right')
+        self._extras_btn = ttk.Button(action_frame, text="Extras ▾", command=self._show_extras_menu)
+        self._extras_btn.pack(side='right', padx=(0, 4))
         ttk.Button(action_frame, text="Settings", command=self._show_settings).pack(side='right', padx=(0, 4))
         ttk.Button(action_frame, text="Reverse Rename…", command=self._reverse_rename).pack(side='right', padx=(0, 4))
 
@@ -330,6 +332,121 @@ class App(tk.Tk):
         dlg.wait_window(dlg)
         return result[0]
 
+    def _show_extras_menu(self):
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Generate Travel Page…", command=self._generate_travel_page)
+        btn = self._extras_btn
+        menu.post(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
+
+    def _generate_travel_page(self):
+        import queue as Q
+        import threading
+        import webbrowser
+
+        from core.travel_page import generate_travel_page, libs_cached
+
+        folder = self._folder_var.get().strip()
+        if not folder or not Path(folder).is_dir():
+            messagebox.showwarning("No folder", "Please select a folder first.")
+            return
+
+        if not libs_cached():
+            if not messagebox.askyesno(
+                "Download required",
+                "The travel page needs map and chart libraries (~500 KB).\n"
+                "They are downloaded once and cached for offline use after that.\n\n"
+                "Download now?",
+            ):
+                return
+
+        import threading as _threading
+        cancel_event = _threading.Event()
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Generating Travel Page")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.protocol("WM_DELETE_WINDOW", lambda: cancel_event.set() or dlg.destroy())
+
+        ttk.Label(dlg, text="Generating travel page…", font=('', 10, 'bold')).pack(
+            padx=24, pady=(16, 4)
+        )
+        status_var = tk.StringVar(value="Starting…")
+        ttk.Label(dlg, textvariable=status_var, foreground='gray', width=44).pack(padx=24)
+        prog = ttk.Progressbar(dlg, mode='indeterminate', length=320)
+        prog.pack(padx=24, pady=(10, 8))
+        prog.start(12)
+        ttk.Button(dlg, text="Cancel", command=lambda: cancel_event.set() or dlg.destroy()).pack(
+            pady=(0, 16)
+        )
+
+        q: Q.Queue = Q.Queue()
+
+        def _worker():
+            try:
+                def on_progress(done, total, name):
+                    q.put(('progress', done, total, name))
+                def on_status(msg):
+                    q.put(('status', msg))
+                out = generate_travel_page(
+                    folder,
+                    on_progress=on_progress,
+                    on_status=on_status,
+                    cancel_event=cancel_event,
+                )
+                q.put(('done', str(out)))
+            except InterruptedError:
+                q.put(('cancelled',))
+            except Exception as e:
+                q.put(('error', str(e)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        def _poll():
+            try:
+                while True:
+                    msg = q.get_nowait()
+                    kind = msg[0]
+                    if kind == 'status':
+                        status_var.set(msg[1])
+                    elif kind == 'progress':
+                        done, total, name = msg[1], msg[2], msg[3]
+                        short = name if len(name) <= 32 else '…' + name[-31:]
+                        status_var.set(f"{done}/{total}  {short}")
+                        if total > 0:
+                            if prog['mode'] == 'indeterminate':
+                                prog.stop()
+                                prog.config(mode='determinate')
+                            prog['value'] = int(100 * done / total)
+                    elif kind == 'done':
+                        prog.stop()
+                        if dlg.winfo_exists():
+                            dlg.destroy()
+                        out_path = msg[1]
+                        if messagebox.askyesno(
+                            "Travel page ready",
+                            f"Saved to:\n{out_path}\n\nOpen in browser now?",
+                        ):
+                            webbrowser.open(f"file:///{out_path.replace(chr(92), '/')}")
+                        return
+                    elif kind == 'cancelled':
+                        prog.stop()
+                        if dlg.winfo_exists():
+                            dlg.destroy()
+                        return
+                    elif kind == 'error':
+                        prog.stop()
+                        if dlg.winfo_exists():
+                            dlg.destroy()
+                        messagebox.showerror("Error", f"Could not generate travel page:\n{msg[1]}")
+                        return
+            except Q.Empty:
+                pass
+            dlg.after(100, _poll)
+
+        dlg.after(100, _poll)
+
     def _show_about(self):
         messagebox.showinfo(
             "About Media File Renamer",
@@ -368,7 +485,13 @@ class App(tk.Tk):
             "can be appended to the filename as country only (e.g. _ITALY) or\n"
             "country + city (e.g. _ITALY_ROME). Works fully offline.\n"
             "The 'Infer location' option extends location to nearby files in\n"
-            "the same folder that have no GPS data of their own.",
+            "the same folder that have no GPS data of their own.\n\n"
+            "Travel Page (Extras menu):\n"
+            "Generates a self-contained HTML slideshow from the selected folder.\n"
+            "Features an interactive heatmap that fills progressively as the\n"
+            "slideshow plays, a timeline histogram with adjustable bin size,\n"
+            "and trip stats (dates, duration, devices, distance).\n"
+            "Videos autoplay. Works fully offline after the first run.",
         )
 
     def _browse(self):

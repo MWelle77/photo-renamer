@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from core.travel_page import generate_travel_page, libs_cached; print\\('travel_page import OK'\\); from app import App; print\\('app import OK'\\)\")",
+      "Bash(python -c \"from core.travel_page import generate_travel_page; print\\('OK'\\)\")"
+    ]
+  }
+}

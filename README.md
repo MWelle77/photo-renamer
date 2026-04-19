@@ -40,6 +40,10 @@ Format: `YYYYMMDDHHMMSS_DEVICE.ext` or `YYYYMMDDHHMMSS_DEVICE_LOCATION.ext`
 
 Download the latest Windows installer from the [Releases](../../releases) page — no Python required.
 
+> **Windows SmartScreen warning**
+> When running the installer you may see "Windows protected your PC." This happens because the app is not code-signed — signing certificates cost money and this project is free and open source, so we skip that.
+> Click **More info → Run anyway** to proceed. The full source code is available here for review.
+
 ---
 
 ## Running from source
@@ -96,6 +100,16 @@ Video files (MP4, MOV, etc.) often store timestamps in UTC rather than local tim
 | Keep as UTC | No conversion — use timestamp as-is (default) |
 | Infer from closest photo | Compares nearby photos (which store local time) to compute the offset automatically |
 | Ask per folder | Prompts you for a UTC offset for each folder that contains videos |
+
+### Travel Page
+
+**Extras ▾ → Generate Travel Page** creates a self-contained HTML slideshow from the selected folder:
+
+- Interactive heatmap that fills progressively as the slideshow plays
+- Timeline histogram with selectable bin size (1 h / 3 h / 6 h / Day)
+- Trip stats: date range, duration, photo/video count, devices, GPS distance
+- Videos autoplay; configurable slide delay (1–8 s)
+- Works **fully offline** after the first run (map and chart libraries are downloaded once and cached)
 
 ---
 
