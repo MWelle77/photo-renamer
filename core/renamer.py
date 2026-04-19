@@ -16,6 +16,8 @@ class FileRecord:
     path: Path
     dt: Optional[datetime]
     device: str
+    gps: Optional[Tuple[float, float]] = None
+    location: str = ''
 
 
 @dataclass
@@ -27,8 +29,11 @@ class RenameResult:
     errors: List[Tuple[Path, str]] = field(default_factory=list)
 
 
-def build_target_stem(dt: datetime, device: str) -> str:
-    return f"{dt.strftime('%Y%m%d%H%M%S')}_{device}"
+def build_target_stem(dt: datetime, device: str, location: str = '') -> str:
+    stem = f"{dt.strftime('%Y%m%d%H%M%S')}_{device}"
+    if location:
+        stem += f"_{location}"
+    return stem
 
 
 def _find_free_name(directory: Path, stem: str, suffix: str,
@@ -69,7 +74,7 @@ def plan_renames(records: List[FileRecord]) -> List[Tuple[Path, str]]:
         recs_sorted = sorted(recs, key=lambda r: r.path.name)
 
         for rec in recs_sorted:
-            stem = build_target_stem(rec.dt, rec.device)
+            stem = build_target_stem(rec.dt, rec.device, rec.location)
             suffix = rec.path.suffix.lower()
             new_name = _find_free_name(directory, stem, suffix, reserved, source=rec.path)
             reserved.add(new_name)

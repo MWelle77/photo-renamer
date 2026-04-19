@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from core.journal import reverse_renames
 from core.worker import MsgDone, MsgProgress, MsgStatus, RenameWorker
-from settings import VIDEO_TZ_MODES, Settings, load_settings, save_settings
+from settings import VIDEO_TZ_MODES, LOCATION_MODES, Settings, load_settings, save_settings
 from utils.formats import VIDEO_EXTENSIONS
 
 
@@ -27,6 +27,11 @@ class App(tk.Tk):
         self.title(f"Media File Renamer v{VERSION}")
         self.resizable(True, True)
         self.minsize(580, 420)
+        try:
+            icon_path = Path(__file__).parent / 'assets' / 'icon.ico'
+            self.iconbitmap(str(icon_path))
+        except Exception:
+            pass
         self._worker: RenameWorker | None = None
         self._queue: queue.Queue = queue.Queue()
         self._after_id = None
@@ -183,8 +188,35 @@ class App(tk.Tk):
                 anchor='w', padx=24, pady=2
             )
 
+        ttk.Separator(dlg, orient='horizontal').pack(fill='x', padx=16, pady=(12, 0))
+
+        ttk.Label(dlg, text="Location in filename", font=('', 10, 'bold')).pack(
+            anchor='w', padx=16, pady=(12, 4)
+        )
+        ttk.Label(
+            dlg,
+            text="Add country or city to the filename using GPS coordinates.\n"
+                 "Requires no internet — lookup is fully offline.",
+            justify='left', foreground='gray',
+        ).pack(anchor='w', padx=16, pady=(0, 8))
+
+        loc_var = tk.StringVar(value=self._settings.location_mode)
+        for key, label in LOCATION_MODES.items():
+            ttk.Radiobutton(dlg, text=label, variable=loc_var, value=key).pack(
+                anchor='w', padx=24, pady=2
+            )
+
+        infer_var = tk.BooleanVar(value=self._settings.location_infer)
+        ttk.Checkbutton(
+            dlg,
+            text="Infer location from nearest photo when GPS is missing",
+            variable=infer_var,
+        ).pack(anchor='w', padx=24, pady=(8, 0))
+
         def _save():
             self._settings.video_tz_mode = mode_var.get()
+            self._settings.location_mode = loc_var.get()
+            self._settings.location_infer = infer_var.get()
             save_settings(self._settings)
             dlg.destroy()
 
@@ -192,6 +224,57 @@ class App(tk.Tk):
         btn_frame.pack(fill='x', padx=16, pady=(12, 14))
         ttk.Button(btn_frame, text="Cancel", command=dlg.destroy).pack(side='right')
         ttk.Button(btn_frame, text="Save", command=_save).pack(side='right', padx=(0, 6))
+
+    def _collect_folder_locations(self, root: str) -> dict[str, str]:
+        """For ask_folder mode: walk all subfolders and ask user for a location string."""
+        folders = [root]
+        for dirpath, dirnames, _ in os.walk(root):
+            dirnames.sort()
+            for d in dirnames:
+                folders.append(os.path.join(dirpath, d))
+
+        locations: dict[str, str] = {}
+        for folder in folders:
+            loc = self._ask_location_for_folder(folder)
+            if loc:
+                locations[str(Path(folder))] = loc
+        return locations
+
+    def _ask_location_for_folder(self, folder: str) -> str:
+        """Show a dialog asking for a manual location label for a folder. Returns '' to skip."""
+        dlg = tk.Toplevel(self)
+        dlg.title("Folder Location")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+        result: list[str] = ['']
+
+        name = Path(folder).name or folder
+        ttk.Label(dlg, text=f"Folder:  {name}", font=('', 10, 'bold')).pack(
+            padx=16, pady=(14, 4)
+        )
+        ttk.Label(
+            dlg,
+            text="Enter a location label for files in this folder that have no GPS.\n"
+                 "Examples:  Stockholm,  Italy Rome,  New York\n"
+                 "Leave blank to skip this folder.",
+            justify='center', foreground='gray',
+        ).pack(padx=16, pady=(0, 10))
+
+        entry_var = tk.StringVar()
+        ttk.Entry(dlg, textvariable=entry_var, width=30).pack(padx=16, pady=(0, 10))
+
+        def _apply():
+            result[0] = entry_var.get().strip()
+            dlg.destroy()
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(pady=(0, 14))
+        ttk.Button(btn_frame, text="Skip", command=dlg.destroy).pack(side='left', padx=6)
+        ttk.Button(btn_frame, text="Apply", command=_apply).pack(side='left', padx=6)
+
+        dlg.wait_window(dlg)
+        return result[0]
 
     def _collect_folder_offsets(self, root: str) -> dict[str, int]:
         """For ask_folder mode: scan for video-containing folders and ask user for each."""
@@ -257,7 +340,8 @@ class App(tk.Tk):
             "──────────────────────────────\n\n"
             "Renames your photos and videos so every file gets a name based\n"
             "on when it was taken — for example:\n\n"
-            "    20240315_143022_IPHONE15.jpg\n\n"
+            "    20240315_143022_IPHONE15.jpg\n"
+            "    20240315_143022_IPHONE15_ITALY_ROME.jpg\n\n"
             "Files sort in chronological order automatically in any folder,\n"
             "regardless of which camera or device they came from.\n\n"
             "How to use it:\n"
@@ -278,13 +362,31 @@ class App(tk.Tk):
             "Video Timezone (Settings):\n"
             "Videos often store time in UTC. You can choose to convert it\n"
             "to local time — either automatically using nearby photos as a\n"
-            "reference, or by entering the UTC offset manually per folder.",
+            "reference, or by entering the UTC offset manually per folder.\n\n"
+            "Location Tagging (Settings):\n"
+            "When GPS coordinates are present in a photo or video, the location\n"
+            "can be appended to the filename as country only (e.g. _ITALY) or\n"
+            "country + city (e.g. _ITALY_ROME). Works fully offline.\n"
+            "The 'Infer location' option extends location to nearby files in\n"
+            "the same folder that have no GPS data of their own.",
         )
 
     def _browse(self):
         folder = filedialog.askdirectory(title="Select folder with media files")
         if folder:
             self._folder_var.set(folder)
+            self._reset_ui()
+
+    def _reset_ui(self):
+        """Reset progress, log, and summary to the initial state."""
+        self._status_var.set("Ready.")
+        self._file_var.set("")
+        self._progress.stop()
+        self._progress.config(mode='determinate', value=0)
+        self._clear_log()
+        self._log_lines.clear()
+        self._summary_frame.pack_forget()
+        self._summary_var.set("")
 
     def _start(self):
         folder = self._folder_var.get().strip()
@@ -307,11 +409,30 @@ class App(tk.Tk):
         if tz_mode == 'ask_folder':
             tz_offsets = self._collect_folder_offsets(folder)
 
-        self._worker = RenameWorker(folder, self._queue, tz_mode=tz_mode, tz_offsets=tz_offsets)
+        location_mode = self._settings.location_mode
+        folder_locations: dict[str, str] = {}
+        if location_mode == 'ask_folder':
+            folder_locations = self._collect_folder_locations(folder)
+
+        # Cancel any stale poll loop before starting a fresh one
+        if self._after_id is not None:
+            self.after_cancel(self._after_id)
+            self._after_id = None
+
+        self._worker = RenameWorker(
+            folder, self._queue,
+            tz_mode=tz_mode, tz_offsets=tz_offsets,
+            location_mode=location_mode,
+            location_infer=self._settings.location_infer,
+            folder_locations=folder_locations,
+        )
         self._worker.start()
         self._after_id = self.after(POLL_MS, self._poll)
 
     def _cancel(self):
+        if self._after_id is not None:
+            self.after_cancel(self._after_id)
+            self._after_id = None
         if self._worker:
             self._worker.stop()
         self._set_running(False)
@@ -358,6 +479,7 @@ class App(tk.Tk):
             self._file_var.set(f"  {msg.filename}")
 
     def _on_done(self, msg: MsgDone):
+        self._after_id = None  # poll loop is ending; clear the handle
         self._set_running(False)
         result = msg.result
         no_meta = msg.no_metadata

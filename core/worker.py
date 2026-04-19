@@ -8,6 +8,7 @@ from __future__ import annotations
 import bisect
 import os
 import queue
+import re
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,6 +21,7 @@ from core.journal import save_journal
 from core.metadata import extract_metadata
 from core.renamer import FileRecord, RenameResult, execute_renames, plan_renames
 from core.scanner import scan_folder
+from utils.countries import COUNTRY_NAMES
 from utils.formats import VIDEO_EXTENSIONS
 
 
@@ -84,14 +86,82 @@ def _apply_video_tz(records: list, mode: str, folder_offsets: dict) -> None:
 
 # ── Worker ─────────────────────────────────────────────────────────────────
 
+def _sanitize_location(raw: str) -> str:
+    """Clean a user-entered location string into the same format as GPS-derived ones."""
+    s = re.sub(r'[^\w]', '_', raw.strip()).upper()
+    return re.sub(r'_+', '_', s).strip('_')
+
+
+def _build_location_str(result: dict, mode: str) -> str:
+    cc = result.get('cc', '').upper()
+    country = COUNTRY_NAMES.get(cc, cc)
+    city = result.get('name', '').strip()
+    # Sanitize: uppercase, replace non-word chars with underscore
+    def clean(s: str) -> str:
+        s = re.sub(r'[^\w]', '_', s).upper()
+        return re.sub(r'_+', '_', s).strip('_')
+    country_clean = clean(country)
+    if mode == 'country':
+        return country_clean
+    city_clean = clean(city)
+    if country_clean and city_clean:
+        return f"{country_clean}_{city_clean}"
+    return country_clean or city_clean
+
+
+def _apply_locations(records: list, mode: str, infer: bool) -> None:
+    try:
+        import reverse_geocoder as rg
+    except ImportError:
+        return
+
+    # Batch lookup for all records that have GPS
+    gps_records = [r for r in records if r.gps is not None]
+    if gps_records:
+        coords = [(r.gps[0], r.gps[1]) for r in gps_records]
+        results = rg.search(coords, verbose=False)
+        for rec, res in zip(gps_records, results):
+            rec.location = _build_location_str(res, mode)
+
+    # Infer location for records without GPS from nearest-in-time record with GPS
+    if infer:
+        by_folder: dict = defaultdict(lambda: {'refs': [], 'targets': []})
+        for rec in records:
+            folder = str(rec.path.parent)
+            if rec.gps is not None and rec.location:
+                by_folder[folder]['refs'].append(rec)
+            elif rec.location == '' and rec.dt is not None:
+                by_folder[folder]['targets'].append(rec)
+
+        for groups in by_folder.values():
+            refs = [r for r in groups['refs'] if r.dt is not None]
+            targets = groups['targets']
+            if not refs or not targets:
+                continue
+            refs_sorted = sorted(refs, key=lambda r: r.dt)
+            ref_dts = [r.dt for r in refs_sorted]
+            for target in targets:
+                pos = bisect.bisect_left(ref_dts, target.dt)
+                candidates = refs_sorted[max(0, pos - 1): pos + 2]
+                if candidates:
+                    closest = min(candidates,
+                                  key=lambda r: abs((r.dt - target.dt).total_seconds()))
+                    target.location = closest.location
+
+
 class RenameWorker(threading.Thread):
     def __init__(self, folder: str, out_queue: queue.Queue,
-                 tz_mode: str = 'utc', tz_offsets: dict = None):
+                 tz_mode: str = 'utc', tz_offsets: dict = None,
+                 location_mode: str = 'off', location_infer: bool = False,
+                 folder_locations: dict = None):
         super().__init__(daemon=True)
         self.folder = folder
         self.q = out_queue
         self.tz_mode = tz_mode
         self.tz_offsets = tz_offsets or {}
+        self.location_mode = location_mode
+        self.location_infer = location_infer
+        self.folder_locations = folder_locations or {}
         self._stop_event = threading.Event()
 
     def stop(self):
@@ -144,16 +214,30 @@ class RenameWorker(threading.Thread):
                 if completed % 10 == 0 or completed == total:
                     q.put(MsgProgress(completed - 1, total, path.name))
                 try:
-                    dt, device = future.result()
+                    dt, device, gps = future.result()
                 except Exception as e:
-                    dt, device = None, 'UNKNOWN'
+                    dt, device, gps = None, 'UNKNOWN', None
                     extraction_errors.append((path, str(e)))
                 if dt is None:
                     no_metadata.append(path)
                 else:
-                    records.append(FileRecord(path=path, dt=dt, device=device))
+                    records.append(FileRecord(path=path, dt=dt, device=device, gps=gps))
 
-        # ── Phase 2.5: timezone adjustment for videos ──────────────────
+        # ── Phase 2.5: location lookup ─────────────────────────────────
+        gps_mode = 'city' if self.location_mode == 'ask_folder' else self.location_mode
+        if gps_mode != 'off':
+            q.put(MsgStatus("Looking up locations..."))
+            _apply_locations(records, gps_mode, self.location_infer)
+
+        # Manual folder locations: fallback for files that still have no location
+        if self.folder_locations:
+            for rec in records:
+                if rec.location == '':
+                    manual = self.folder_locations.get(str(rec.path.parent), '')
+                    if manual:
+                        rec.location = _sanitize_location(manual)
+
+        # ── Phase 2.6: timezone adjustment for videos ──────────────────
         if self.tz_mode != 'utc':
             q.put(MsgStatus("Adjusting video timestamps for timezone..."))
             _apply_video_tz(records, self.tz_mode, self.tz_offsets)

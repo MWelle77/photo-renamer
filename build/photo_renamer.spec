@@ -14,6 +14,12 @@ try:
 except Exception:
     heif_datas, heif_binaries, heif_hidden = [], [], []
 
+# ── reverse_geocoder: collect data files (cities CSV) ────────────────────
+try:
+    rg_datas, rg_binaries, rg_hidden = collect_all('reverse_geocoder')
+except Exception:
+    rg_datas, rg_binaries, rg_hidden = [], [], []
+
 # ── pymediainfo: bundle libmediainfo.dll (Windows) ───────────────────────
 mediainfo_binaries = []
 try:
@@ -30,8 +36,8 @@ block_cipher = None
 a = Analysis(
     ['../main.py'],
     pathex=['..'],          # repo root so "from core.xxx" and "from utils.xxx" resolve
-    binaries=mediainfo_binaries + heif_binaries,
-    datas=heif_datas,
+    binaries=mediainfo_binaries + heif_binaries + rg_binaries,
+    datas=heif_datas + rg_datas + [('../assets/icon.ico', 'assets')],
     hiddenimports=[
         # exifread dynamically imports makernote submodules
         'exifread',
@@ -53,7 +59,11 @@ a = Analysis(
         # PIL
         'PIL._tkinter_finder',
         'PIL.ExifTags',
-    ] + heif_hidden,
+        'reverse_geocoder',
+        'scipy',
+        'scipy.spatial',
+        'scipy.spatial.cKDTree',
+    ] + heif_hidden + rg_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -86,6 +96,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # icon='../assets/icon.ico',  # uncomment and add an .ico file if desired
+    icon='../assets/icon.ico',
     onefile=True,
 )

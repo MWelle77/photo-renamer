@@ -12,7 +12,7 @@
 
 #define AppName      "Media File Renamer"
 ; NOTE: keep AppVersion in sync with version.py
-#define AppVersion   "1.3"
+#define AppVersion   "1.4"
 #define AppPublisher "Michael C. Welle"
 #define AppURL       "https://mcwelle.com/"
 #define AppExeName   "MediaFileRenamer.exe"
@@ -36,6 +36,9 @@ OutputBaseFilename=MediaFileRenamer_v{#AppVersion}_Setup
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+WizardImageFile=..\assets\installer_banner.bmp
+WizardSmallImageFile=..\assets\installer_small.bmp
+SetupIconFile=..\assets\icon.ico
 ; Allow per-user install (no admin required), but offer all-users if run as admin
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
@@ -48,13 +51,14 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\dist\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\assets\icon.ico";    DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Start Menu
-Name: "{group}\{#AppName}";                      Filename: "{app}\{#AppExeName}"
+Name: "{group}\{#AppName}";                      Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\icon.ico"
 Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
 ; Desktop (optional task)
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

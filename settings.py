@@ -9,6 +9,13 @@ VIDEO_TZ_MODES = {
     'ask_folder':  'Ask me for each folder that contains videos',
 }
 
+LOCATION_MODES = {
+    'off':        'Off (no location in filename)',
+    'country':    'Country only  (e.g. _ITALY)',
+    'city':       'Country + City  (e.g. _ITALY_ROME)',
+    'ask_folder': 'Ask me per folder  (manual fallback when no GPS)',
+}
+
 
 def _settings_dir() -> Path:
     appdata = os.environ.get('APPDATA')
@@ -23,6 +30,8 @@ SETTINGS_FILE = _settings_dir() / 'settings.json'
 @dataclass
 class Settings:
     video_tz_mode: str = 'utc'
+    location_mode: str = 'off'
+    location_infer: bool = False
 
 
 def load_settings() -> Settings:
