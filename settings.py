@@ -1,14 +1,23 @@
 import json
+import os
 from dataclasses import dataclass, asdict
 from pathlib import Path
-
-SETTINGS_FILE = Path.home() / '.photo_renamer_settings.json'
 
 VIDEO_TZ_MODES = {
     'utc':         'Keep as UTC (no conversion)',
     'infer_image': 'Infer from closest photo in same folder',
     'ask_folder':  'Ask me for each folder that contains videos',
 }
+
+
+def _settings_dir() -> Path:
+    appdata = os.environ.get('APPDATA')
+    if appdata:
+        return Path(appdata) / 'Media File Renamer'
+    return Path.home() / '.media_file_renamer'
+
+
+SETTINGS_FILE = _settings_dir() / 'settings.json'
 
 
 @dataclass
@@ -27,6 +36,7 @@ def load_settings() -> Settings:
 
 def save_settings(s: Settings) -> None:
     try:
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         SETTINGS_FILE.write_text(json.dumps(asdict(s), indent=2), encoding='utf-8')
     except Exception:
         pass

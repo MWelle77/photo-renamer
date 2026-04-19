@@ -200,10 +200,12 @@ def _from_video(path: Path) -> DateDevice:
 
 # Patterns tried in order — most specific first
 _FN_PATTERNS_WITH_TIME = [
-    # YYYYMMDD[_-T]HHMMSS  e.g. IMG_20240315_143022, Screenshot_20240315-143022
+    # YYYYMMDD[_-T]HHMMSS  e.g. IMG_20240315_143022, PXL_20240315_143022, VID_20240315_143022
     re.compile(r'(2\d{3})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])[_\-T]([01]\d|2[0-3])([0-5]\d)([0-5]\d)'),
-    # YYYY-MM-DD[_ T]HH[-:.]MM[-:.]SS  e.g. 2024-03-15 14.30.22, 2024-03-15_14-30-22
-    re.compile(r'(2\d{3})[-_.](0[1-9]|1[0-2])[-_.](\d{2})[_\- T]([01]\d|2[0-3])[-:.]([0-5]\d)[-:.]([0-5]\d)'),
+    # YYYY-MM-DD[_ T-]HH[-:.]MM[-:.]SS  e.g. 2024-03-15 14.30.22, 2024-03-15_14-30-22
+    re.compile(r'(2\d{3})[-_.](0[1-9]|1[0-2])[-_.](\d{2})[_\- T\-]([01]\d|2[0-3])[-:.]([0-5]\d)[-:.]([0-5]\d)'),
+    # YYYY-MM-DD at HH.MM.SS  e.g. iOS "Screenshot 2024-03-15 at 14.30.22"
+    re.compile(r'(2\d{3})-(0[1-9]|1[0-2])-(\d{2}) at ([01]\d|2[0-3])\.([0-5]\d)\.([0-5]\d)'),
     # 14 consecutive digits YYYYMMDDHHMMSS  e.g. 20240315143022
     re.compile(r'(?<!\d)(2\d{3})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])([01]\d|2[0-3])([0-5]\d)([0-5]\d)(?!\d)'),
 ]

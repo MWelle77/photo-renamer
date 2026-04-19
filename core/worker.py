@@ -11,7 +11,7 @@ import queue
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -40,6 +40,7 @@ class MsgDone:
     result: RenameResult
     no_metadata: list
     journal_path: Optional[Path] = None
+    extraction_errors: list = field(default_factory=list)
 
 
 # ── Timezone helpers ───────────────────────────────────────────────────────
@@ -128,6 +129,7 @@ class RenameWorker(threading.Thread):
         # ── Phase 2: read metadata in parallel ─────────────────────────
         records = []
         no_metadata = []
+        extraction_errors = []
         completed = 0
         max_workers = min(8, (os.cpu_count() or 2) * 2)
 
@@ -139,13 +141,13 @@ class RenameWorker(threading.Thread):
                     return
                 path = future_to_path[future]
                 completed += 1
-                # Throttle UI updates — every 10 files or the last one
                 if completed % 10 == 0 or completed == total:
                     q.put(MsgProgress(completed - 1, total, path.name))
                 try:
                     dt, device = future.result()
-                except Exception:
+                except Exception as e:
                     dt, device = None, 'UNKNOWN'
+                    extraction_errors.append((path, str(e)))
                 if dt is None:
                     no_metadata.append(path)
                 else:
@@ -178,8 +180,9 @@ class RenameWorker(threading.Thread):
         journal_path = None
         if result.renamed:
             try:
-                journal_path = save_journal(self.folder, result.renamed)
-            except Exception:
-                pass
+                journal_path = save_journal(self.folder, result.renamed, result.renamed_sidecars)
+            except Exception as e:
+                q.put(MsgStatus(f"Warning: could not save journal: {e}"))
 
-        q.put(MsgDone(result=result, no_metadata=no_metadata, journal_path=journal_path))
+        q.put(MsgDone(result=result, no_metadata=no_metadata,
+                      journal_path=journal_path, extraction_errors=extraction_errors))

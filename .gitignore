@@ -8,6 +8,9 @@ build/photo_renamer/
 dist/
 *.spec.bak
 
+# Inno Setup output
+installer/output/
+
 # Settings saved locally
 .photo_renamer_settings.json
 

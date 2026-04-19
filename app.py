@@ -11,14 +11,14 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from core.journal import JOURNAL_FILENAME, reverse_renames
+from core.journal import reverse_renames
 from core.worker import MsgDone, MsgProgress, MsgStatus, RenameWorker
 from settings import VIDEO_TZ_MODES, Settings, load_settings, save_settings
 from utils.formats import VIDEO_EXTENSIONS
 
 
 POLL_MS = 100  # how often to drain the worker queue (milliseconds)
-VERSION = "1.2"
+from version import VERSION
 
 
 class App(tk.Tk):
@@ -116,7 +116,7 @@ class App(tk.Tk):
         journal_path = filedialog.askopenfilename(
             title="Select a rename journal to reverse",
             initialdir=initialdir,
-            filetypes=[("Rename journal", JOURNAL_FILENAME), ("All files", "*.*")],
+            filetypes=[("Rename journal", "*.json"), ("All files", "*.*")],
         )
         if not journal_path:
             return
@@ -371,6 +371,8 @@ class App(tk.Tk):
             self._append_log(f"NOMETA {path.name}")
         for path, err in result.errors:
             self._append_log(f"ERR  {path.name}  — {err}")
+        for path, err in msg.extraction_errors:
+            self._append_log(f"WARN {path.name}  — metadata error: {err}")
 
         # Summary
         n_renamed = len(result.renamed)
