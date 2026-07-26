@@ -98,7 +98,7 @@ Video files (MP4, MOV, etc.) often store timestamps in UTC rather than local tim
 | Option | Description |
 |--------|-------------|
 | Keep as UTC | No conversion — use timestamp as-is (default) |
-| Infer from closest photo | Compares nearby photos (which store local time) to compute the offset automatically |
+| Auto-detect from photos | Reads the timezone embedded in photo EXIF (OffsetTimeOriginal); falls back to timing-based matching for cameras that don't store it |
 | Ask per folder | Prompts you for a UTC offset for each folder that contains videos |
 
 ### Travel Page
@@ -109,7 +109,7 @@ Video files (MP4, MOV, etc.) often store timestamps in UTC rather than local tim
 - Timeline histogram with selectable bin size (1 h / 3 h / 6 h / Day)
 - Trip stats: date range, duration, photo/video count, devices, GPS distance
 - Videos autoplay; configurable slide delay (1–8 s)
-- Works **fully offline** after the first run (map and chart libraries are downloaded once and cached)
+- Map and chart libraries are downloaded once and cached locally — map background tiles require an internet connection
 
 ---
 

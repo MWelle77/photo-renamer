@@ -58,6 +58,7 @@ def _apply_video_tz(records: list, mode: str, folder_offsets: dict) -> None:
                 rec.dt = rec.dt + timedelta(hours=hours)
 
     elif mode == 'infer_image':
+        from collections import Counter
         by_folder: dict = defaultdict(lambda: {'images': [], 'videos': []})
         for rec in records:
             key = 'videos' if rec.path.suffix.lower() in VIDEO_EXTENSIONS else 'images'
@@ -69,19 +70,41 @@ def _apply_video_tz(records: list, mode: str, folder_offsets: dict) -> None:
             if not imgs or not vids:
                 continue
 
-            # Sort images by datetime for binary search — O(n log n) instead of O(n²)
-            imgs_sorted = sorted(imgs, key=lambda r: r.dt)
-            img_dts = [r.dt for r in imgs_sorted]
+            # Primary: use the most common tz_offset embedded in image EXIF
+            # (iPhone and modern Android always store OffsetTimeOriginal).
+            tz_counts = Counter(r.tz_offset for r in imgs if r.tz_offset is not None)
+            if tz_counts:
+                folder_offset = tz_counts.most_common(1)[0][0]
+            else:
+                # Fallback: videos store UTC, images store local time — naive
+                # bisect finds the wrong "nearest" image.  Try every integer
+                # offset and pick the one that minimises total distance between
+                # each adjusted video time and its nearest photo.
+                imgs_sorted = sorted(imgs, key=lambda r: r.dt)
+                img_dts = [r.dt for r in imgs_sorted]
+                best_offset = 0
+                best_total_dist = float('inf')
+                for offset_h in range(-14, 15):
+                    td = timedelta(hours=offset_h)
+                    total_dist = 0.0
+                    for vid_rec in vids:
+                        adjusted = vid_rec.dt + td
+                        pos = bisect.bisect_left(img_dts, adjusted)
+                        candidates = imgs_sorted[max(0, pos - 1): pos + 2]
+                        if candidates:
+                            total_dist += min(
+                                abs((r.dt - adjusted).total_seconds())
+                                for r in candidates
+                            )
+                    if total_dist < best_total_dist:
+                        best_total_dist = total_dist
+                        best_offset = offset_h
+                folder_offset = best_offset
 
-            for vid_rec in vids:
-                pos = bisect.bisect_left(img_dts, vid_rec.dt)
-                candidates = imgs_sorted[max(0, pos - 1): pos + 2]
-                if not candidates:
-                    continue
-                closest = min(candidates, key=lambda r: abs((r.dt - vid_rec.dt).total_seconds()))
-                offset_hours = round((closest.dt - vid_rec.dt).total_seconds() / 3600)
-                if -14 <= offset_hours <= 14:
-                    vid_rec.dt = vid_rec.dt + timedelta(hours=offset_hours)
+            if folder_offset != 0:
+                td = timedelta(hours=folder_offset)
+                for vid_rec in vids:
+                    vid_rec.dt = vid_rec.dt + td
 
 
 # ── Worker ─────────────────────────────────────────────────────────────────
@@ -214,14 +237,15 @@ class RenameWorker(threading.Thread):
                 if completed % 10 == 0 or completed == total:
                     q.put(MsgProgress(completed - 1, total, path.name))
                 try:
-                    dt, device, gps = future.result()
+                    dt, device, gps, tz_offset = future.result()
                 except Exception as e:
-                    dt, device, gps = None, 'UNKNOWN', None
+                    dt, device, gps, tz_offset = None, 'UNKNOWN', None, None
                     extraction_errors.append((path, str(e)))
                 if dt is None:
                     no_metadata.append(path)
                 else:
-                    records.append(FileRecord(path=path, dt=dt, device=device, gps=gps))
+                    records.append(FileRecord(path=path, dt=dt, device=device,
+                                              gps=gps, tz_offset=tz_offset))
 
         # ── Phase 2.5: location lookup ─────────────────────────────────
         gps_mode = 'city' if self.location_mode == 'ask_folder' else self.location_mode
@@ -255,18 +279,23 @@ class RenameWorker(threading.Thread):
             if idx % 10 == 0 or idx == total_r - 1:
                 q.put(MsgProgress(idx, total_r, name))
 
-        try:
-            result = execute_renames(plan, on_progress=on_progress)
-        except InterruptedError:
-            return
+        result = execute_renames(plan, on_progress=on_progress)
 
-        # Save journal so renames can be reversed
+        # Save journal so renames can be reversed (even for a partial/cancelled run)
         journal_path = None
         if result.renamed:
             try:
                 journal_path = save_journal(self.folder, result.renamed, result.renamed_sidecars)
             except Exception as e:
                 q.put(MsgStatus(f"Warning: could not save journal: {e}"))
+
+        if result.cancelled:
+            n = len(result.renamed)
+            msg = f"Cancelled — {n} file(s) renamed."
+            if journal_path:
+                msg += " Journal saved for reversal."
+            q.put(MsgStatus(msg))
+            return
 
         q.put(MsgDone(result=result, no_metadata=no_metadata,
                       journal_path=journal_path, extraction_errors=extraction_errors))

@@ -18,6 +18,7 @@ class FileRecord:
     device: str
     gps: Optional[Tuple[float, float]] = None
     location: str = ''
+    tz_offset: Optional[int] = None  # hours offset from UTC embedded in image EXIF
 
 
 @dataclass
@@ -27,6 +28,7 @@ class RenameResult:
     skipped_already_correct: List[Path] = field(default_factory=list)
     skipped_no_metadata: List[Path] = field(default_factory=list)
     errors: List[Tuple[Path, str]] = field(default_factory=list)
+    cancelled: bool = False
 
 
 def build_target_stem(dt: datetime, device: str, location: str = '') -> str:
@@ -99,7 +101,11 @@ def execute_renames(
 
     for idx, (src, new_name) in enumerate(plan):
         if on_progress:
-            on_progress(idx, total, src.name)
+            try:
+                on_progress(idx, total, src.name)
+            except InterruptedError:
+                result.cancelled = True
+                return result
 
         # Already correctly named
         if src.name == new_name:
@@ -124,6 +130,11 @@ def execute_renames(
                     if not sidecar_dest.exists():
                         sidecar_src.rename(sidecar_dest)
                         result.renamed_sidecars.append((sidecar_src, sidecar_dest))
+                    else:
+                        result.errors.append((
+                            sidecar_src,
+                            f"Sidecar destination already exists: {sidecar_dest.name} — {sidecar_src.name} not renamed",
+                        ))
                     break  # only rename one (avoid double-renaming .xmp and .XMP)
 
         except OSError as e:

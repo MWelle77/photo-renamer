@@ -14,7 +14,7 @@ try:
 except Exception:
     heif_datas, heif_binaries, heif_hidden = [], [], []
 
-# ── reverse_geocoder: collect data files (cities CSV) ────────────────────
+# ── reverse_geocoder: collect data files (cities CSV) ��───────────────────
 try:
     rg_datas, rg_binaries, rg_hidden = collect_all('reverse_geocoder')
 except Exception:
@@ -79,23 +79,31 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,  # folder mode — dependencies go into _internal/
     name='MediaFileRenamer',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,          # set True if UPX is installed and AV is not a concern
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,      # no black cmd window
+    console=False,          # no black cmd window
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon='../assets/icon.ico',
-    onefile=True,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='MediaFileRenamer',
 )

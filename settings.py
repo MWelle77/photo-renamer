@@ -5,7 +5,7 @@ from pathlib import Path
 
 VIDEO_TZ_MODES = {
     'utc':         'Keep as UTC (no conversion)',
-    'infer_image': 'Infer from closest photo in same folder',
+    'infer_image': 'Auto-detect from photos in same folder (reads EXIF timezone)',
     'ask_folder':  'Ask me for each folder that contains videos',
 }
 

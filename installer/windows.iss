@@ -8,11 +8,11 @@
 ;   iscc installer\windows.iss
 ; Or open it in the Inno Setup GUI and click Compile.
 ;
-; Output: installer\output\MediaFileRenamer_v1.5_Setup.exe
+; Output: installer\output\MediaFileRenamer_v1.6_Setup.exe
 
 #define AppName      "Media File Renamer"
 ; NOTE: keep AppVersion in sync with version.py
-#define AppVersion   "1.5"
+#define AppVersion   "1.6"
 #define AppPublisher "Michael C. Welle"
 #define AppURL       "https://mcwelle.com/"
 #define AppExeName   "MediaFileRenamer.exe"
@@ -33,32 +33,50 @@ AllowNoIcons=yes
 LicenseFile=..\LICENSE
 OutputDir=output
 OutputBaseFilename=MediaFileRenamer_v{#AppVersion}_Setup
-Compression=lzma
+; Compression
+Compression=lzma2/ultra64
 SolidCompression=yes
+; Platform
+MinVersion=10.0
+ArchitecturesInstallIn64BitMode=x64compatible
+; Appearance
 WizardStyle=modern
 WizardImageFile=..\assets\installer_banner.bmp
 WizardSmallImageFile=..\assets\installer_small.bmp
 SetupIconFile=..\assets\icon.ico
-; Allow per-user install (no admin required), but offer all-users if run as admin
+UninstallDisplayIcon={app}\{#AppExeName}
+; Privileges
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+; Smooth upgrades — prompt to close running instances
+CloseApplications=yes
+; Version metadata embedded in the installer exe
+VersionInfoVersion=1.6.0.0
+VersionInfoDescription=Media File Renamer Setup
+VersionInfoCompany=Michael C. Welle
+VersionInfoProductName={#AppName}
+VersionInfoProductVersion={#AppVersion}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\dist\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\assets\icon.ico";    DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\MediaFileRenamer\{#AppExeName}"; DestDir: "{app}";           Flags: ignoreversion
+Source: "..\dist\MediaFileRenamer\_internal\*";   DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; Start Menu
-Name: "{group}\{#AppName}";                      Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\icon.ico"
+Name: "{group}\{#AppName}";                      Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
 ; Desktop (optional task)
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+; Clean up settings left behind in AppData on uninstall
+Type: filesandordirs; Name: "{userappdata}\Media File Renamer"

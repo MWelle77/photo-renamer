@@ -2,7 +2,7 @@
 Generate a self-contained HTML travel-page / slideshow from a media folder.
 
 JS libraries (Leaflet, Leaflet.heat, Chart.js) are downloaded once and cached
-in AppData so the generated page works offline afterwards.
+in AppData. Map background tiles still require an internet connection.
 Media files are referenced by relative path — keep the HTML in the same folder.
 """
 
@@ -18,9 +18,45 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional
 
+import re
+
 from core.metadata import extract_metadata
 from core.scanner import scan_folder
 from utils.formats import VIDEO_EXTENSIONS
+
+# Matches our canonical filename stem: 20240315143022_DEVICE[_LOCATION...]
+_OUR_FMT = re.compile(
+    r'^(2\d{3})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])'
+    r'([01]\d|2[0-3])([0-5]\d)([0-5]\d)_(.+)$'
+)
+
+
+def _dt_from_stem(stem: str) -> Optional[datetime]:
+    m = _OUR_FMT.match(stem)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                            int(m.group(4)), int(m.group(5)), int(m.group(6)))
+        except ValueError:
+            pass
+    return None
+
+
+def _device_from_stem(stem: str) -> str:
+    """First segment after the timestamp underscore (e.g. 'IPHONE15PRO')."""
+    m = _OUR_FMT.match(stem)
+    return m.group(7).split('_')[0] if m else ''
+
+
+def count_unformatted(folder: str) -> tuple[int, int]:
+    """Return (unformatted_count, total_count) of media files in folder."""
+    total = 0
+    unformatted = 0
+    for path in scan_folder(folder):
+        total += 1
+        if _dt_from_stem(path.stem) is None:
+            unformatted += 1
+    return unformatted, total
 
 
 # ── JS / CSS library cache ─────────────────────────────────────────────────
@@ -105,11 +141,14 @@ def _scan(folder: Path, on_progress: Callable = None, cancel_event=None) -> List
     entries: List[_Entry] = []
 
     def _extract(path: Path) -> _Entry:
-        dt, device, gps = extract_metadata(path)
+        _, _, gps, _ = extract_metadata(path)   # only GPS is needed from EXIF
+        stem = path.stem
+        dt = _dt_from_stem(stem)
+        device = _device_from_stem(stem)
         return _Entry(
             rel_path=path.relative_to(folder).as_posix(),
             dt=dt,
-            device=device if device != 'UNKNOWN' else '',
+            device=device,
             lat=gps[0] if gps else None,
             lon=gps[1] if gps else None,
             loc_label='',
@@ -219,7 +258,9 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 #stats-pills{display:flex;gap:6px;overflow:hidden;flex-wrap:nowrap}
 .pill{background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-size:.72rem;color:var(--muted);white-space:nowrap}
 #main{display:grid;grid-template-columns:3fr 2fr;overflow:hidden}
+#main.no-map{grid-template-columns:1fr}
 #media-panel{display:flex;flex-direction:column;border-right:1px solid var(--border);overflow:hidden}
+#main.no-map #media-panel{border-right:none}
 #media-display{flex:1;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden}
 #media-display img{max-width:100%;max-height:100%;object-fit:contain}
 #media-display video{width:100%;height:100%;object-fit:contain}
@@ -286,6 +327,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
       <option value="6">6 h</option>
       <option value="24">Day</option>
     </select>
+    <button class="cb" id="btn-map" title="Toggle map panel" style="margin-left:8px;font-size:.78rem;padding:4px 10px">&#x1F5FA; Map</button>
   </div>
 </div>
 <script>TMPL_LEAFLET_JS</script>
@@ -483,6 +525,21 @@ document.addEventListener('keydown',e=>{
   });
 })();
 
+// ── Map panel toggle ───────────────────────────────────────────────────────
+(function(){
+  const btn=document.getElementById('btn-map');
+  const main=document.getElementById('main');
+  const side=document.getElementById('side-panel');
+  let hidden=false;
+  btn.onclick=function(){
+    hidden=!hidden;
+    side.style.display=hidden?'none':'';
+    main.classList.toggle('no-map',hidden);
+    btn.style.opacity=hidden?'0.45':'1';
+    map.invalidateSize();
+  };
+})();
+
 // ── Init ───────────────────────────────────────────────────────────────────
 buildBins(3); makeTlChart();
 if(PHOTOS.length){
@@ -540,6 +597,6 @@ def generate_travel_page(
     stats = _calc_stats(entries, root.name)
     html  = _build_html(entries, stats)
 
-    out = root / 'travel_page.html'
+    out = root / '!travel_page.html'
     out.write_text(html, encoding='utf-8')
     return out

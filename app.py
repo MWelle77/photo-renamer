@@ -343,18 +343,33 @@ class App(tk.Tk):
         import threading
         import webbrowser
 
-        from core.travel_page import generate_travel_page, libs_cached
+        from core.travel_page import generate_travel_page, libs_cached, count_unformatted
 
         folder = self._folder_var.get().strip()
         if not folder or not Path(folder).is_dir():
             messagebox.showwarning("No folder", "Please select a folder first.")
             return
 
+        unformatted, total = count_unformatted(folder)
+        if unformatted > 0:
+            if not messagebox.askyesno(
+                "Files not renamed",
+                f"{unformatted} of {total} media file(s) in this folder have not been\n"
+                "renamed yet.\n\n"
+                "The Travel Page reads timestamps from filenames — files not in the\n"
+                "renamed format will appear without a date and out of order.\n\n"
+                "Run 'Start Renaming' first for best results.\n\n"
+                "Continue anyway?",
+                icon='warning',
+            ):
+                return
+
         if not libs_cached():
             if not messagebox.askyesno(
                 "Download required",
                 "The travel page needs map and chart libraries (~500 KB).\n"
-                "They are downloaded once and cached for offline use after that.\n\n"
+                "They are downloaded once and cached locally — map tiles still\n"
+                "require an internet connection when viewing the page.\n\n"
                 "Download now?",
             ):
                 return
@@ -478,8 +493,8 @@ class App(tk.Tk):
             "Use Reverse Rename… to restore all files to their original names.\n\n"
             "Video Timezone (Settings):\n"
             "Videos often store time in UTC. You can choose to convert it\n"
-            "to local time — either automatically using nearby photos as a\n"
-            "reference, or by entering the UTC offset manually per folder.\n\n"
+            "to local time — either automatically by reading the timezone\n"
+            "embedded in photos (EXIF), or by entering the UTC offset manually.\n\n"
             "Location Tagging (Settings):\n"
             "When GPS coordinates are present in a photo or video, the location\n"
             "can be appended to the filename as country only (e.g. _ITALY) or\n"
@@ -491,7 +506,8 @@ class App(tk.Tk):
             "Features an interactive heatmap that fills progressively as the\n"
             "slideshow plays, a timeline histogram with adjustable bin size,\n"
             "and trip stats (dates, duration, devices, distance).\n"
-            "Videos autoplay. Works fully offline after the first run.",
+            "Videos autoplay. Map and chart libraries are cached locally\n"
+            "after the first run; map background tiles require internet.",
         )
 
     def _browse(self):

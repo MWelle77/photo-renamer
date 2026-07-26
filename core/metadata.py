@@ -1,6 +1,6 @@
 """
-Extract (datetime, device_string, gps_coords) from image and video files.
-Returns (None, 'UNKNOWN', None) when metadata is absent or unreadable.
+Extract (datetime, device_string, gps_coords, tz_offset_hours) from image and video files.
+Returns (None, 'UNKNOWN', None, None) when metadata is absent or unreadable.
 """
 
 import re
@@ -12,7 +12,7 @@ from utils.formats import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from utils.sanitize import sanitize_device_name
 
 Coords = Optional[Tuple[float, float]]
-MetadataResult = Tuple[Optional[datetime], str, Coords]
+MetadataResult = Tuple[Optional[datetime], str, Coords, Optional[int]]
 
 # Register HEIF/HEIC support once at import time
 try:
@@ -50,13 +50,13 @@ def extract_metadata(path: Path) -> MetadataResult:
         elif suffix in VIDEO_EXTENSIONS:
             result = _from_video(path)
         else:
-            return None, 'UNKNOWN', None
+            return None, 'UNKNOWN', None, None
     except Exception:
-        result = (None, 'UNKNOWN', None)
+        result = (None, 'UNKNOWN', None, None)
     # Fallback: try to parse date from the filename itself (GPS stays None)
     if result[0] is None:
         dt, device = _from_filename(path)
-        return dt, device, None
+        return dt, device, None, None
     return result
 
 
@@ -125,15 +125,24 @@ def _from_image(path: Path) -> MetadataResult:
             lon = _dms_to_decimal(tags.get('GPS GPSLongitude'),
                                    str(tags.get('GPS GPSLongitudeRef', '')))
             gps = (lat, lon) if lat is not None and lon is not None else None
+            tz_offset = _parse_tz_offset(
+                str(tags.get('EXIF OffsetTimeOriginal', '') or
+                    tags.get('EXIF OffsetTime', '') or '')
+            )
             if dt:
                 # exifread found the date but missed GPS (common for HEIC and
                 # some JPEG encodings) — try Pillow specifically for GPS.
                 if gps is None and _PILLOW_OK:
                     try:
-                        gps = _pillow_gps(_PilImage.open(path).getexif())
+                        img_exif = _PilImage.open(path).getexif()
+                        gps = _pillow_gps(img_exif)
+                        if tz_offset is None:
+                            tz_offset = _parse_tz_offset(
+                                str(img_exif.get(36881, '') or img_exif.get(36880, '') or '')
+                            )
                     except Exception:
                         pass
-                return dt, device, gps
+                return dt, device, gps, tz_offset
         except Exception:
             pass
 
@@ -147,11 +156,15 @@ def _from_image(path: Path) -> MetadataResult:
             model = str(exif.get(272, '')).strip()
             device = sanitize_device_name(make, model)
             gps = _pillow_gps(exif)
-            return dt, device, gps
+            # Tag 36881 = OffsetTimeOriginal, 36880 = OffsetTime
+            tz_offset = _parse_tz_offset(
+                str(exif.get(36881, '') or exif.get(36880, '') or '')
+            )
+            return dt, device, gps, tz_offset
         except Exception:
             pass
 
-    return None, 'UNKNOWN', None
+    return None, 'UNKNOWN', None, None
 
 
 def _exifread_datetime(tags: dict) -> Optional[datetime]:
@@ -173,6 +186,18 @@ def _pillow_datetime(exif) -> Optional[datetime]:
                 return datetime.strptime(str(val), '%Y:%m:%d %H:%M:%S')
             except ValueError:
                 pass
+    return None
+
+
+def _parse_tz_offset(s: str) -> Optional[int]:
+    """Parse '+10:00' or '-05:30' EXIF OffsetTime string into integer hours (rounded)."""
+    if not s:
+        return None
+    m = re.match(r'^([+-])(\d{1,2}):(\d{2})$', s.strip())
+    if m:
+        sign = 1 if m.group(1) == '+' else -1
+        total_minutes = sign * (int(m.group(2)) * 60 + int(m.group(3)))
+        return round(total_minutes / 60)
     return None
 
 
@@ -264,9 +289,9 @@ def _from_video(path: Path) -> MetadataResult:
 
         gps = _parse_xyz(str(getattr(general, 'xyz', '') or ''))
 
-        return dt, sanitize_device_name(make, model), gps
+        return dt, sanitize_device_name(make, model), gps, None
     except Exception:
-        return None, 'UNKNOWN', None
+        return None, 'UNKNOWN', None, None
 
 
 # ── Filename date parsing (last-resort fallback) ───────────────────────────
