@@ -1,11 +1,26 @@
 # Current State — Media File Renamer
 
-_Last updated: 2026-08-13 (Claude Code session — critical review + v1.8 fixes)_
+_Last updated: 2026-08-13 (Claude Code session — critical review + v1.8 fixes + release build)_
 
 ## Where things stand
 
-The working tree contains the **uncommitted v1.8 release** (last commit is `97e8f62` v1.6).
-It bundles two waves of changes, neither committed yet:
+**v1.8 is committed (`8a9c597`), tagged `v1.8`, and pushed to origin/main.**
+Release build done: exe rebuilt with PyInstaller 6.19 (Python 3.14 — note:
+`py -3.14` has all deps + PyInstaller; plain `python` in git-bash resolves to
+a different interpreter without them), installer compiled with Inno Setup 6 →
+`installer/output/MediaFileRenamer_v1.8_Setup.exe` (2026-08-13).
+
+**Remaining manual step:** create the GitHub release for tag `v1.8` at
+https://github.com/MWelle77/photo-renamer/releases/new?tag=v1.8 and attach the
+setup exe (no `gh` CLI on this machine). Release notes were drafted in the
+session; regenerate from the commit message / table below if lost.
+
+**Caution:** `dist/` staleness matters — Inno only wraps `dist\MediaFileRenamer\`,
+so always rerun PyInstaller before ISCC. The v1.7 setup exe (2026-07-31) was
+compiled against the v1.6-era dist (built 2026-07-26) and likely never
+contained the v1.7 Python changes.
+
+The v1.8 release bundled two waves of changes:
 
 1. **v1.7 feature work** (was in the tree before this session):
    - GPMF GPS extraction for GoPro MP4s (`core/metadata.py`)
