@@ -10,10 +10,12 @@ Release build done: exe rebuilt with PyInstaller 6.19 (Python 3.14 — note:
 a different interpreter without them), installer compiled with Inno Setup 6 →
 `installer/output/MediaFileRenamer_v1.8_Setup.exe` (2026-08-13).
 
-**Remaining manual step:** create the GitHub release for tag `v1.8` at
-https://github.com/MWelle77/photo-renamer/releases/new?tag=v1.8 and attach the
-setup exe (no `gh` CLI on this machine). Release notes were drafted in the
-session; regenerate from the commit message / table below if lost.
+**GitHub release published** (2026-08-13): tag `v1.8` with
+`MediaFileRenamer_v1.8_Setup.exe` attached — release cycle complete.
+Note there is no `gh` CLI on this machine; releases are published via the web UI.
+
+**Next up:** the agreed test suite (plan below), and a smoke test of the
+installed app against a real GoPro file (GPS5-era and Hero 9+ if available).
 
 **Caution:** `dist/` staleness matters — Inno only wraps `dist\MediaFileRenamer\`,
 so always rerun PyInstaller before ISCC. The v1.7 setup exe (2026-07-31) was
