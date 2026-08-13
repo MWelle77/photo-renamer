@@ -4,6 +4,7 @@ Returns (None, 'UNKNOWN', None, None) when metadata is absent or unreadable.
 """
 
 import re
+import struct as _st
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -203,6 +204,262 @@ def _parse_tz_offset(s: str) -> Optional[int]:
 
 # ── Video ──────────────────────────────────────────────────────────────────
 
+# GPMF type codes → (bytes_per_value, struct_format_char)
+_GPMF_NUM = {
+    b'b': (1, 'b'), b'B': (1, 'B'),
+    b's': (2, 'h'), b'S': (2, 'H'),
+    b'l': (4, 'i'), b'L': (4, 'I'),
+    b'f': (4, 'f'), b'd': (8, 'd'),
+    b'j': (8, 'q'), b'J': (8, 'Q'),
+}
+
+
+def _gpmf_iter(data: bytes):
+    """Yield (key, type_byte, payload) for each record in a GPMF byte stream."""
+    pos = 0
+    while pos + 8 <= len(data):
+        key  = data[pos:pos+4]
+        typ  = data[pos+4:pos+5]
+        esz  = data[pos+5]
+        rep  = _st.unpack_from('>H', data, pos+6)[0]
+        pos += 8
+        total = esz * rep
+        if pos + total > len(data):
+            break
+        payload = data[pos:pos+total]
+        pos += total + ((-total) & 3)          # pad to 4-byte boundary
+
+        if typ == b'\x00':
+            yield key, typ, payload            # container — payload is nested GPMF
+        elif typ in _GPMF_NUM:
+            base, fc = _GPMF_NUM[typ]
+            n_total = total // base
+            if n_total:
+                vals = list(_st.unpack_from(f'>{n_total}{fc}', payload))
+                n_per = esz // base            # values per element (5 for GPS5)
+                if n_per > 1:
+                    yield key, typ, [vals[i*n_per:(i+1)*n_per] for i in range(rep)]
+                else:
+                    yield key, typ, vals
+            else:
+                yield key, typ, []
+        else:
+            yield key, typ, payload            # unknown type — raw bytes
+
+
+def _gpmf_gps(data: bytes) -> Coords:
+    """
+    Parse a GPMF binary blob and return the first GPS coordinate that has a
+    valid fix.  Handles both GPS5 (older GoPros) and GPS9 (Hero 9+).
+
+    GPS5: type 'l', 5 int32 per element, fix via separate GPSF stream.
+    GPS9: composite type lllllllSS (7 int32 + 2 uint16 = 32 bytes), fix is
+          the last uint16 (byte 30-31 of each element, value ≥ 2 = good fix).
+    """
+    for key, typ, content in _gpmf_iter(data):
+        if key != b'DEVC' or typ != b'\x00':
+            continue
+        for skey, styp, scontent in _gpmf_iter(content):
+            if skey != b'STRM' or styp != b'\x00':
+                continue
+            scal_list = []
+            gpsf = 0
+            gps5 = None
+            gps9_raw = None
+
+            for rkey, _rt, rvals in _gpmf_iter(scontent):
+                if rkey == b'SCAL' and isinstance(rvals, list) and rvals:
+                    scal_list = rvals
+                elif rkey == b'GPSF' and isinstance(rvals, list) and rvals:
+                    gpsf = rvals[0]
+                elif rkey == b'GPS5' and isinstance(rvals, list) and rvals:
+                    gps5 = rvals
+                elif rkey == b'GPS9' and isinstance(rvals, bytes) and rvals:
+                    gps9_raw = rvals
+
+            # GPS5 path — per-channel SCAL (lat=SCAL[0], lon=SCAL[1]); fix via GPSF
+            if gps5 and gpsf >= 2 and scal_list:
+                lat_s = scal_list[0]
+                lon_s = scal_list[1] if len(scal_list) >= 2 else scal_list[0]
+                if lat_s and lon_s:
+                    first = gps5[0]
+                    if isinstance(first, list) and len(first) >= 2:
+                        lat, lon = first[0] / lat_s, first[1] / lon_s
+                        if -90 <= lat <= 90 and -180 <= lon <= 180:
+                            return lat, lon
+
+            # GPS9 path — TYPE=lllllllSS (7×int32 + 2×uint16 = 32 bytes/element)
+            # fix is the last uint16 (offset 30); lat/lon scale from SCAL[0..1]
+            if gps9_raw and len(scal_list) >= 2:
+                lat_s, lon_s = scal_list[0], scal_list[1]
+                if lat_s and lon_s:
+                    for off in range(0, len(gps9_raw) - 31, 32):
+                        elem = gps9_raw[off:off+32]
+                        fix = _st.unpack_from('>H', elem, 30)[0]
+                        if fix >= 2:
+                            ints = _st.unpack_from('>2i', elem, 0)
+                            lat, lon = ints[0] / lat_s, ints[1] / lon_s
+                            if -90 <= lat <= 90 and -180 <= lon <= 180:
+                                return lat, lon
+    return None
+
+
+def _mp4_boxes(fh, start: int, end: int):
+    """Yield (type, payload_start, payload_end) for MP4 boxes in [start, end)."""
+    pos = start
+    while pos + 8 <= end:
+        fh.seek(pos)
+        hdr = fh.read(8)
+        if len(hdr) < 8:
+            return
+        size = _st.unpack('>I', hdr[:4])[0]
+        typ = hdr[4:8]
+        hdr_len = 8
+        if size == 1:                          # 64-bit largesize follows
+            ext = fh.read(8)
+            if len(ext) < 8:
+                return
+            size = _st.unpack('>Q', ext)[0]
+            hdr_len = 16
+        elif size == 0:                        # box extends to end of parent
+            size = end - pos
+        if size < hdr_len or pos + size > end:
+            return
+        yield typ, pos + hdr_len, pos + size
+        pos += size
+
+
+def _gpmd_sample_locations(fh, file_size: int):
+    """
+    Walk moov > trak > mdia > minf > stbl to find the GoPro 'gpmd' telemetry
+    track.  Returns (chunk_offsets, read_size) or None if no such track.
+    Only box headers and sample tables are read — never the media data.
+    """
+    moov = next(((s, e) for t, s, e in _mp4_boxes(fh, 0, file_size)
+                 if t == b'moov'), None)
+    if not moov:
+        return None
+
+    for typ, ts, te in _mp4_boxes(fh, *moov):
+        if typ != b'trak':
+            continue
+        stbl = None
+        for t2, s2, e2 in _mp4_boxes(fh, ts, te):
+            if t2 != b'mdia':
+                continue
+            for t3, s3, e3 in _mp4_boxes(fh, s2, e2):
+                if t3 != b'minf':
+                    continue
+                for t4, s4, e4 in _mp4_boxes(fh, s3, e3):
+                    if t4 == b'stbl':
+                        stbl = (s4, e4)
+        if not stbl:
+            continue
+
+        stsd_head = stco = co64 = stsz_head = None
+        for t5, s5, e5 in _mp4_boxes(fh, *stbl):
+            fh.seek(s5)
+            if t5 == b'stsd':
+                stsd_head = fh.read(min(e5 - s5, 256))
+            elif t5 == b'stco':
+                stco = fh.read(e5 - s5)
+            elif t5 == b'co64':
+                co64 = fh.read(e5 - s5)
+            elif t5 == b'stsz':
+                stsz_head = fh.read(min(e5 - s5, 12))
+
+        if not stsd_head or b'gpmd' not in stsd_head:
+            continue
+
+        offsets = []
+        if stco and len(stco) >= 8:
+            n = min(_st.unpack_from('>I', stco, 4)[0], (len(stco) - 8) // 4)
+            offsets = list(_st.unpack_from(f'>{n}I', stco, 8))
+        elif co64 and len(co64) >= 8:
+            n = min(_st.unpack_from('>I', co64, 4)[0], (len(co64) - 8) // 8)
+            offsets = list(_st.unpack_from(f'>{n}Q', co64, 8))
+
+        # stsz constant sample size (0 = per-sample table; use 64 KB default,
+        # generous for GPMF payloads which are typically a few KB per second)
+        read_size = 1 << 16
+        if stsz_head and len(stsz_head) >= 12:
+            const_size = _st.unpack_from('>I', stsz_head, 4)[0]
+            if const_size:
+                read_size = min(max(const_size, 4096), 1 << 20)
+
+        if offsets:
+            return offsets, read_size
+    return None
+
+
+def _gps_from_gpmf_scan(fh) -> Coords:
+    """
+    Fallback brute-force scan for DEVC markers when the MP4 box tree could
+    not be parsed.  Reads 128 KB chunks so large files are never fully loaded.
+    """
+    CHUNK  = 1 << 17   # 128 KB per read
+    EXTRA  = 1 << 16   # 64 KB read-ahead after a DEVC marker
+    WINDOW = 8          # small overlap so markers split across chunks are not missed
+    fh.seek(0)
+    tail = b''
+    while True:
+        raw = fh.read(CHUNK)
+        if not raw:
+            break
+        buf = tail + raw
+        off = 0
+        while True:
+            p = buf.find(b'DEVC\x00', off)
+            if p < 0:
+                break
+            cur = fh.tell()
+            extra = fh.read(EXTRA)
+            fh.seek(cur)
+            # A false-positive match in compressed video data must not
+            # abort the scan — skip it and keep looking.
+            try:
+                gps = _gpmf_gps(buf[p:] + extra)
+            except Exception:
+                gps = None
+            if gps is not None:
+                return gps
+            off = p + 1
+        tail = buf[-WINDOW:]
+    return None
+
+
+def _gps_from_gpmf(path: Path) -> Coords:
+    """
+    Extract the first valid GPS fix from a GoPro MP4's GPMF telemetry.
+
+    Primary path: locate the 'gpmd' track via the MP4 sample tables and read
+    only its samples (a few KB per second of footage) — a video with no GPS
+    lock costs seconds, not a full multi-GB file read.  Falls back to a
+    brute-force DEVC scan if the box tree is unparsable.
+    """
+    try:
+        with open(path, 'rb') as fh:
+            try:
+                found = _gpmd_sample_locations(fh, path.stat().st_size)
+            except Exception:
+                found = None
+            if found:
+                offsets, read_size = found
+                for off in offsets:
+                    try:
+                        fh.seek(off)
+                        gps = _gpmf_gps(fh.read(read_size))
+                    except Exception:
+                        continue
+                    if gps is not None:
+                        return gps
+                return None
+            return _gps_from_gpmf_scan(fh)
+    except Exception:
+        pass
+    return None
+
+
 _VIDEO_DATE_FORMATS = [
     'UTC %Y-%m-%dT%H:%M:%S',
     'UTC %Y:%m:%d %H:%M:%S',
@@ -246,14 +503,25 @@ def _parse_xyz(xyz: str) -> Coords:
     return None
 
 
+def _track_gps(track, attrs) -> Coords:
+    """Try a list of pymediainfo attribute names on one track, return first parseable GPS."""
+    for attr in attrs:
+        raw = str(getattr(track, attr, '') or '')
+        if raw:
+            gps = _parse_xyz(raw)
+            if gps:
+                return gps
+    return None
+
+
 def _from_video(path: Path) -> MetadataResult:
     if not _MEDIAINFO_OK:
-        return None, 'UNKNOWN', None
+        return None, 'UNKNOWN', None, None
     try:
         info = _MediaInfo.parse(str(path))
         general = next((t for t in info.tracks if t.track_type == 'General'), None)
         if not general:
-            return None, 'UNKNOWN', None
+            return None, 'UNKNOWN', None, None
 
         dt = None
         for attr in ('encoded_date', 'tagged_date', 'recorded_date', 'mastered_date'):
@@ -282,12 +550,33 @@ def _from_video(path: Path) -> MetadataResult:
                     make, model = t_make, t_model
                     break
 
-        if not make and not model:
-            other_formats = str(getattr(general, 'other_format_list', '') or '')
-            if 'gpmd' in other_formats.lower():
-                make = 'GoPro'
+        other_formats = str(getattr(general, 'other_format_list', '') or '')
+        has_gpmd = 'gpmd' in other_formats.lower()
 
-        gps = _parse_xyz(str(getattr(general, 'xyz', '') or ''))
+        if not make and not model and has_gpmd:
+            make = 'GoPro'
+
+        # GPS — try multiple attribute names (GoPro, Android, iPhone, generic).
+        # iPhone MOVs store location as com.apple.quicktime.location.ISO6709.
+        gps = _track_gps(general, (
+            'xyz', 'location', 'comapplequicktimelocationiso6709',
+            'comgpslocation', 'comgooglelocation', 'coordinates',
+        ))
+
+        # Also check non-General tracks — GoPro stores telemetry in an 'Other' track
+        # that pymediainfo sometimes surfaces with its own xyz/location attribute
+        if gps is None:
+            for track in info.tracks:
+                if track.track_type == 'General':
+                    continue
+                gps = _track_gps(track, ('xyz', 'location', 'comgpslocation'))
+                if gps:
+                    break
+
+        # GoPro: pymediainfo cannot decode the binary GPMF telemetry track —
+        # fall back to parsing the raw MP4 bytes directly.
+        if gps is None and has_gpmd:
+            gps = _gps_from_gpmf(path)
 
         return dt, sanitize_device_name(make, model), gps, None
     except Exception:

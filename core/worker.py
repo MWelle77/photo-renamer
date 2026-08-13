@@ -132,7 +132,8 @@ def _build_location_str(result: dict, mode: str) -> str:
     return country_clean or city_clean
 
 
-def _apply_locations(records: list, mode: str, infer: bool) -> None:
+def _apply_locations(records: list, mode: str, infer: bool,
+                     infer_max_seconds: int = 1800) -> None:
     try:
         import reverse_geocoder as rg
     except ImportError:
@@ -169,13 +170,15 @@ def _apply_locations(records: list, mode: str, infer: bool) -> None:
                 if candidates:
                     closest = min(candidates,
                                   key=lambda r: abs((r.dt - target.dt).total_seconds()))
-                    target.location = closest.location
+                    if abs((closest.dt - target.dt).total_seconds()) <= infer_max_seconds:
+                        target.location = closest.location
 
 
 class RenameWorker(threading.Thread):
     def __init__(self, folder: str, out_queue: queue.Queue,
                  tz_mode: str = 'utc', tz_offsets: dict = None,
                  location_mode: str = 'off', location_infer: bool = False,
+                 location_infer_max_minutes: int = 30,
                  folder_locations: dict = None):
         super().__init__(daemon=True)
         self.folder = folder
@@ -184,6 +187,7 @@ class RenameWorker(threading.Thread):
         self.tz_offsets = tz_offsets or {}
         self.location_mode = location_mode
         self.location_infer = location_infer
+        self.location_infer_max_minutes = location_infer_max_minutes
         self.folder_locations = folder_locations or {}
         self._stop_event = threading.Event()
 
@@ -247,11 +251,20 @@ class RenameWorker(threading.Thread):
                     records.append(FileRecord(path=path, dt=dt, device=device,
                                               gps=gps, tz_offset=tz_offset))
 
-        # ── Phase 2.5: location lookup ─────────────────────────────────
+        # ── Phase 2.5: timezone adjustment for videos ──────────────────
+        # Must run BEFORE location inference: videos store UTC while photos
+        # store local time, and inference matches records by time proximity —
+        # comparing mixed timezones would exceed the max-gap cap by hours.
+        if self.tz_mode != 'utc':
+            q.put(MsgStatus("Adjusting video timestamps for timezone..."))
+            _apply_video_tz(records, self.tz_mode, self.tz_offsets)
+
+        # ── Phase 2.6: location lookup ─────────────────────────────────
         gps_mode = 'city' if self.location_mode == 'ask_folder' else self.location_mode
         if gps_mode != 'off':
             q.put(MsgStatus("Looking up locations..."))
-            _apply_locations(records, gps_mode, self.location_infer)
+            _apply_locations(records, gps_mode, self.location_infer,
+                             infer_max_seconds=self.location_infer_max_minutes * 60)
 
         # Manual folder locations: fallback for files that still have no location
         if self.folder_locations:
@@ -260,11 +273,6 @@ class RenameWorker(threading.Thread):
                     manual = self.folder_locations.get(str(rec.path.parent), '')
                     if manual:
                         rec.location = _sanitize_location(manual)
-
-        # ── Phase 2.6: timezone adjustment for videos ──────────────────
-        if self.tz_mode != 'utc':
-            q.put(MsgStatus("Adjusting video timestamps for timezone..."))
-            _apply_video_tz(records, self.tz_mode, self.tz_offsets)
 
         # ── Phase 3: build plan ────────────────────────────────────────
         q.put(MsgStatus("Building rename plan..."))

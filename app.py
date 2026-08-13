@@ -215,10 +215,31 @@ class App(tk.Tk):
             variable=infer_var,
         ).pack(anchor='w', padx=24, pady=(8, 0))
 
+        infer_gap_frame = ttk.Frame(dlg)
+        infer_gap_frame.pack(anchor='w', padx=40, pady=(4, 0))
+        ttk.Label(infer_gap_frame, text="Max time gap for inference:").pack(side='left')
+        infer_max_var = tk.IntVar(value=self._settings.location_infer_max_minutes)
+        infer_spin = ttk.Spinbox(infer_gap_frame, from_=1, to=1440,
+                                 textvariable=infer_max_var, width=5)
+        infer_spin.pack(side='left', padx=(6, 4))
+        ttk.Label(infer_gap_frame, text="minutes", foreground='gray').pack(side='left')
+
+        def _sync_infer_state(*_args):
+            infer_spin.configure(state='normal' if infer_var.get() else 'disabled')
+        infer_var.trace_add('write', _sync_infer_state)
+        _sync_infer_state()
+
         def _save():
             self._settings.video_tz_mode = mode_var.get()
             self._settings.location_mode = loc_var.get()
             self._settings.location_infer = infer_var.get()
+            # IntVar.get() raises TclError on empty/non-numeric spinbox text;
+            # from_/to only constrain the arrows, not typed input — clamp here.
+            try:
+                minutes = int(infer_max_var.get())
+            except (tk.TclError, ValueError):
+                minutes = self._settings.location_infer_max_minutes
+            self._settings.location_infer_max_minutes = max(1, min(1440, minutes))
             save_settings(self._settings)
             dlg.destroy()
 
@@ -563,6 +584,7 @@ class App(tk.Tk):
             tz_mode=tz_mode, tz_offsets=tz_offsets,
             location_mode=location_mode,
             location_infer=self._settings.location_infer,
+            location_infer_max_minutes=self._settings.location_infer_max_minutes,
             folder_locations=folder_locations,
         )
         self._worker.start()

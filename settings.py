@@ -32,13 +32,21 @@ class Settings:
     video_tz_mode: str = 'utc'
     location_mode: str = 'off'
     location_infer: bool = False
+    location_infer_max_minutes: int = 30
 
 
 def load_settings() -> Settings:
     try:
         raw = json.loads(SETTINGS_FILE.read_text(encoding='utf-8'))
         valid = {k: v for k, v in raw.items() if k in Settings.__dataclass_fields__}
-        return Settings(**valid)
+        s = Settings(**valid)
+        # Hand-edited JSON may hold a string or out-of-range value here, which
+        # would blow up later in the worker ("30" * 60 is a 120-char string).
+        try:
+            s.location_infer_max_minutes = max(1, min(1440, int(s.location_infer_max_minutes)))
+        except (TypeError, ValueError):
+            s.location_infer_max_minutes = 30
+        return s
     except Exception:
         return Settings()
 

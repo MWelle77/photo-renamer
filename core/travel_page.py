@@ -395,6 +395,7 @@ function makeTlChart(){
       borderColor:tlBins.map(()=>'rgba(240,136,62,0.85)'),
       borderWidth:1,borderRadius:2}]},
     options:{responsive:true,maintainAspectRatio:false,animation:false,
+      interaction:{mode:'index',intersect:false},
       plugins:{legend:{display:false},tooltip:{callbacks:{
         title:i=>tlLabels[i[0].dataIndex],label:i=>i.raw+' file(s)'}}},
       scales:{
@@ -402,12 +403,8 @@ function makeTlChart(){
            grid:{color:'rgba(255,255,255,0.04)'}},
         y:{ticks:{color:'#8b949e',font:{size:10}},
            grid:{color:'rgba(255,255,255,0.04)'}}},
-      onClick:(_e,els)=>{
-        if(!els.length) return;
-        const binStart=tlBins[els[0].dataIndex];
-        const binEnd=binStart+parseInt(document.getElementById('bin-size').value,10)*3600000;
-        const i=PHOTOS.findIndex(p=>p.ts>=binStart&&p.ts<binEnd);
-        if(i>=0) show(i);
+      onHover:(_e,els)=>{
+        document.getElementById('tl-chart').style.cursor=els.length?'pointer':'default';
       }}
   });
 }
@@ -475,16 +472,26 @@ function scheduleAdvance(gen){
 }
 
 function startPlay(){
-  if(isPlaying) return;
+  const vid=document.getElementById('m-vid');
+  if(isPlaying){
+    // Slideshow is already in play mode but the video was paused via native controls — resume it
+    if(vid.style.display!=='none' && vid.paused) vid.play().catch(()=>{});
+    document.getElementById('btn-play').innerHTML='&#x23F8;';
+    return;
+  }
   isPlaying=true;
   document.getElementById('btn-play').innerHTML='&#x23F8;';
   const p=PHOTOS[idx];
-  if(p&&!p.video){
+  if(p&&p.video){
+    // Video may have been paused via native controls (or already ended)
+    // while the slideshow was stopped — resume or advance, don't stall.
+    if(vid.ended) scheduleAdvance(showGen);
+    else if(vid.paused) vid.play().catch(()=>{});
+  } else if(p){
     const ms=parseInt(document.getElementById('speed').value,10);
     const gen=showGen;
     slideTimer=setTimeout(()=>{ if(gen===showGen) scheduleAdvance(gen); }, ms);
   }
-  // If current item is a video, onended is already wired up by show()
 }
 function stopPlay(){
   isPlaying=false;
@@ -493,7 +500,15 @@ function stopPlay(){
   vid.pause(); vid.onended=null;
   document.getElementById('btn-play').innerHTML='&#x25B6;';
 }
-function togglePlay(){ isPlaying?stopPlay():startPlay(); }
+function togglePlay(){
+  const vid=document.getElementById('m-vid');
+  // If the slideshow is "playing" but the video was paused by native controls, treat
+  // the page play button as resume rather than stop.
+  if(isPlaying && vid.style.display!=='none' && vid.paused && !vid.ended){
+    startPlay(); return;
+  }
+  isPlaying?stopPlay():startPlay();
+}
 
 document.getElementById('btn-first').onclick=()=>{stopPlay();show(0);};
 document.getElementById('btn-prev') .onclick=()=>{stopPlay();show(idx-1);};
@@ -539,6 +554,21 @@ document.addEventListener('keydown',e=>{
     map.invalidateSize();
   };
 })();
+
+// ── Timeline click — use x-scale pixel→index conversion (bypasses element hit-test) ──
+document.getElementById('tl-chart').addEventListener('click',function(e){
+  if(!tlChart||!tlBins.length) return;
+  const rect=this.getBoundingClientRect();
+  const x=e.clientX-rect.left;
+  const scale=tlChart.scales.x;
+  if(!scale) return;
+  const di=Math.round(scale.getValueForPixel(x));
+  if(di<0||di>=tlBins.length) return;
+  const binStart=tlBins[di];
+  const binEnd=binStart+parseInt(document.getElementById('bin-size').value,10)*3600000;
+  const i=PHOTOS.findIndex(function(p){return p.ts>=binStart&&p.ts<binEnd;});
+  if(i>=0) show(i);
+});
 
 // ── Init ───────────────────────────────────────────────────────────────────
 buildBins(3); makeTlChart();

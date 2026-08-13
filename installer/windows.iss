@@ -8,11 +8,11 @@
 ;   iscc installer\windows.iss
 ; Or open it in the Inno Setup GUI and click Compile.
 ;
-; Output: installer\output\MediaFileRenamer_v1.6_Setup.exe
+; Output: installer\output\MediaFileRenamer_v1.8_Setup.exe
 
 #define AppName      "Media File Renamer"
 ; NOTE: keep AppVersion in sync with version.py
-#define AppVersion   "1.6"
+#define AppVersion   "1.8"
 #define AppPublisher "Michael C. Welle"
 #define AppURL       "https://mcwelle.com/"
 #define AppExeName   "MediaFileRenamer.exe"
@@ -51,7 +51,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 ; Smooth upgrades — prompt to close running instances
 CloseApplications=yes
 ; Version metadata embedded in the installer exe
-VersionInfoVersion=1.6.0.0
+VersionInfoVersion=1.8.0.0
 VersionInfoDescription=Media File Renamer Setup
 VersionInfoCompany=Michael C. Welle
 VersionInfoProductName={#AppName}
